@@ -171,7 +171,11 @@ else:
             first_activity = user_logs["Date"].min().date()
             today = datetime.date.today()
             active_days = (today - first_activity).days + 1
+            # Count completed tasks
             completed = sum(user_logs[t].astype(bool).sum() for t in TASKS)
+            # Cap completed so it doesn't exceed the theoretical max
+            completed = min(completed, active_days * TASKS_PER_DAY)
+            # Calculate missed tasks safely
             missed = max((active_days * TASKS_PER_DAY) - completed, 0)
             progress = (completed / (active_days * TASKS_PER_DAY)) * 100 if active_days > 0 else 0
             rating = calculate_fotmob_rating(progress)
