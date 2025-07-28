@@ -2,9 +2,8 @@ import streamlit as st
 import pandas as pd
 import datetime
 import plotly.express as px
-import json
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials
 
 # ---------------------
 # CONFIG
@@ -27,14 +26,15 @@ if dark_mode:
     )
 
 # ---------------------
-# GOOGLE SHEETS AUTH
+# GOOGLE SHEETS AUTH (Modern Way)
 # ---------------------
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-credentials = dict(st.secrets["gcp_service_account"])
-credentials["private_key"] = credentials["private_key"].replace("\\n", "\n")
+# Convert st.secrets to dict and fix private_key newlines
+credentials_dict = dict(st.secrets["gcp_service_account"])
+credentials_dict["private_key"] = credentials_dict["private_key"].replace("\\n", "\n")
 
-creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials, scope)
+creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
 client = gspread.authorize(creds)
 
 SHEET_NAME = "Task_Tracker"
@@ -80,7 +80,6 @@ with st.sidebar:
     selected_month = st.number_input("Select Month", min_value=1, max_value=12, value=datetime.date.today().month, step=1)
 
     st.markdown("---")
-    # Export all logs
     logs_df_all = load_logs()
     if not logs_df_all.empty:
         st.download_button(
@@ -91,7 +90,7 @@ with st.sidebar:
         )
 
 # ---------------------
-# LOGIN (ROLE BASED)
+# LOGIN
 # ---------------------
 st.title("✅ Task Tracker")
 username = st.text_input("Enter your name (case-sensitive):")
@@ -111,8 +110,9 @@ TASK_2 = "Market Research"
 TASKS_PER_DAY = 2
 
 st.subheader("✅ Log Tasks")
-
-selected_date = st.date_input("Select Date", value=datetime.date.today(), min_value=datetime.date.today() - datetime.timedelta(days=1), max_value=datetime.date.today())
+selected_date = st.date_input("Select Date", value=datetime.date.today(),
+                               min_value=datetime.date.today() - datetime.timedelta(days=1),
+                               max_value=datetime.date.today())
 
 logs_df = load_logs()
 user_logs_today = logs_df[(logs_df["User"] == username) & (logs_df["Date"] == str(selected_date))]
@@ -177,7 +177,8 @@ else:
 
         col1, col2 = st.columns([2, 2])
         with col1:
-            fig_bar = px.bar(summary_df, x="Progress %", y="User", orientation="h", title="Leaderboard", color="Progress %", color_continuous_scale="Blues")
+            fig_bar = px.bar(summary_df, x="Progress %", y="User", orientation="h",
+                             title="Leaderboard", color="Progress %", color_continuous_scale="Blues")
             st.plotly_chart(fig_bar, use_container_width=True)
 
         with col2:
