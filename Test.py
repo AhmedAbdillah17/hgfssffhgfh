@@ -27,8 +27,8 @@ sheet = client.open(SHEET_NAME).worksheet("Log")
 USERS = ["MQ", "Samo", "Bashe"]
 TASKS = ["10 YouTube Comment Replies", "Market Research"]
 TASKS_PER_DAY = len(TASKS)
+GRACE_DAYS = 2
 REQUIRED_COLUMNS = ["Timestamp", "User", "Date"] + TASKS + ["Role", "Action"]
-GRACE_DAYS = 2  # Global grace period for missed calculation
 
 # Ensure headers exist
 if len(sheet.get_all_values()) == 0:
@@ -72,7 +72,7 @@ def calculate_streak(user_logs):
     max_streak = 0
     prev = None
     for _, row in user_logs.iterrows():
-        if all(row[t] for t in TASKS):
+        if all(row[t] for t in TASKS):  # Full completion
             if prev and (row["Date"].date() - prev).days == 1:
                 streak += 1
             else:
@@ -80,9 +80,6 @@ def calculate_streak(user_logs):
             prev = row["Date"].date()
             max_streak = max(max_streak, streak)
     return max_streak
-
-def color_for_rating(val):
-    return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
 
 # ---------------------
 # SIDEBAR FILTER
@@ -147,23 +144,36 @@ else:
             progress = (completed / theoretical_max) * 100 if theoretical_max > 0 else 0
             rating = calculate_fotmob_rating(progress)
             streak = calculate_streak(user_logs)
-        summary.append({"User": user, "Tasks Done": completed, "Remaining": missed,
-                        "Streak": f"🔥 {streak}-day", "Rating": rating})
+
+        summary.append({
+            "User": user,
+            "Tasks Done": completed,
+            "Remaining": missed,
+            "Streak": f"🔥 {streak}-day",
+            "Rating": rating
+        })
 
     summary_df = pd.DataFrame(summary).sort_values(by="Rating", ascending=False)
 
+    # ---------------------
     # KPIs
+    # ---------------------
     col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
     col_kpi1.metric("🏆 Best Performer", summary_df.iloc[0]["User"])
     col_kpi2.metric("📊 Avg Rating", f"{summary_df['Rating'].mean():.1f}")
     col_kpi3.metric("✅ Total Done", int(summary_df["Tasks Done"].sum()))
     col_kpi4.metric("❌ Total Missed", int(summary_df["Remaining"].sum()))
 
-    # Custom HTML Table
+    # ---------------------
+    # CUSTOM HTML TABLE
+    # ---------------------
+    def color_for_rating(val):
+        return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
+
     table_html = """
     <style>
-        table {width:100%; border-collapse: collapse; margin-top:10px;}
-        th, td {padding:10px; text-align:center; border-bottom:1px solid #444;}
+        table {width:100%; border-collapse: collapse; margin-top:15px;}
+        th, td {padding:10px; text-align:center; border-bottom:1px solid #444; font-size:16px;}
         th {background:#222; color:#fff;}
     </style>
     <table>
@@ -185,7 +195,9 @@ else:
     table_html += "</table>"
     st.markdown(table_html, unsafe_allow_html=True)
 
-    # Charts
+    # ---------------------
+    # VISUALS
+    # ---------------------
     col1, col2 = st.columns([2, 2])
     with col1:
         st.plotly_chart(px.bar(summary_df, x="Rating", y="User", orientation="h",
@@ -205,7 +217,7 @@ else:
     st.plotly_chart(px.line(trend_df, x="Day", y="Completed Tasks", color="User",
                              title="📈 Daily Task Completion Trend", markers=True), use_container_width=True)
 
-    # Task Distribution Pie
+    # Task Distribution
     total_tasks = {t: logs_df_filtered[t].sum() for t in TASKS}
     st.plotly_chart(px.pie(names=list(total_tasks.keys()), values=list(total_tasks.values()),
                            title="📊 Task Distribution"), use_container_width=True)
