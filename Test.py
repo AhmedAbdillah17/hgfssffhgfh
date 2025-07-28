@@ -75,14 +75,6 @@ def save_log(user, date, task_status, action="Log Updated"):
     sheet.update([logs.columns.tolist()] + logs.astype(str).values.tolist())
 
 
-def get_filtered_logs(year, month):
-    logs_df = load_logs()
-    if logs_df.empty:
-        return logs_df
-    logs_df = logs_df.dropna(subset=["Date"])
-    return logs_df[(logs_df["Date"].dt.year == year) & (logs_df["Date"].dt.month == month)]
-
-
 def calculate_fotmob_rating(progress):
     """Convert progress (0-100%) to FotMob-style rating (0-10)."""
     rating = (progress / 10)  # Scale
@@ -130,16 +122,19 @@ with st.sidebar:
         )
 
 # ---------------------
+# GLOBAL START DATE
+# ---------------------
+today_date = datetime.date.today()
+global_start_date = logs_df_all["Date"].min().date() if not logs_df_all.empty else today_date
+
+# ---------------------
 # LOG TASKS
 # ---------------------
 st.title("📊 Task Tracker")
-st.subheader("✅ Log Today's Tasks")
-
-today_date = datetime.date.today()
-
-# Restrict logging to today's date
-selected_date = today_date
-st.info(f"Logging is allowed for today only: **{today_date}**")
+st.subheader("✅ Log Tasks")
+selected_date = st.date_input("Select Date", value=today_date,
+                               min_value=global_start_date, max_value=today_date)
+st.caption(f"You can log tasks from {global_start_date} to {today_date}")
 
 for user in USERS:
     st.markdown(f"### {user}")
@@ -156,36 +151,31 @@ for user in USERS:
 # DASHBOARD
 # ---------------------
 st.subheader(f"📈 Dashboard ({selected_month}/{selected_year})")
-logs_df_filtered = get_filtered_logs(selected_year, selected_month)
+logs_df_filtered = logs_df_all[
+    (logs_df_all["Date"].dt.year == selected_year) &
+    (logs_df_all["Date"].dt.month == selected_month)
+]
 
 if logs_df_filtered.empty:
     st.info("No logs yet for this month.")
 else:
     summary = []
+    active_days_global = (today_date - global_start_date).days + 1
+
     for user in USERS:
         user_logs = logs_df_filtered[logs_df_filtered["User"] == user].copy()
-        if user_logs.empty:
-            completed, missed, streak, rating = 0, 0, 0, 0
-        else:
-            # Only count missed after user's first activity
-            first_activity = user_logs["Date"].min().date()
-            today = datetime.date.today()
-            active_days = (today - first_activity).days + 1
-            # Count completed tasks
-            completed = sum(user_logs[t].astype(bool).sum() for t in TASKS)
-            # Cap completed so it doesn't exceed the theoretical max
-            completed = min(completed, active_days * TASKS_PER_DAY)
-            # Calculate missed tasks safely
-            missed = max((active_days * TASKS_PER_DAY) - completed, 0)
-            progress = (completed / (active_days * TASKS_PER_DAY)) * 100 if active_days > 0 else 0
-            rating = calculate_fotmob_rating(progress)
-            streak = calculate_streak(user_logs)
-
+        completed = sum(user_logs[t].astype(bool).sum() for t in TASKS)
+        # Calculate missed based on global start
+        completed = min(completed, active_days_global * TASKS_PER_DAY)
+        missed = max((active_days_global * TASKS_PER_DAY) - completed, 0)
+        progress = (completed / (active_days_global * TASKS_PER_DAY)) * 100 if active_days_global > 0 else 0
+        rating = calculate_fotmob_rating(progress)
+        streak = calculate_streak(user_logs)
         summary.append({
             "User": user,
             "Tasks Done": completed,
             "Remaining": missed,
-            "Streak": f"🔥 {streak}-day" if streak > 0 else "🔥 0-day",
+            "Streak": f"🔥 {streak}-day",
             "Rating": rating
         })
 
@@ -197,7 +187,7 @@ else:
     # ---------------------
     col1, col2 = st.columns([2, 2])
     with col1:
-        # Leaderboard by Rating (FotMob-style colours)
+        # Leaderboard by Rating (FotMob-style)
         fig_rating = px.bar(summary_df, x="Rating", y="User", orientation="h",
                             title="Leaderboard (Rating)",
                             color="Rating",
