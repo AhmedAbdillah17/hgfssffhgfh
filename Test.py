@@ -5,210 +5,139 @@ import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
 
-# ---------------------
-# PAGE CONFIG
-# ---------------------
+# ── PAGE CONFIG ─────────────────────────────────────────────
 st.set_page_config(page_title="Task Tracker", page_icon="✅", layout="wide")
 
-# ---------------------
-# GOOGLE SHEETS AUTH
-# ---------------------
+# ── GOOGLE SHEETS AUTH ──────────────────────────────────────
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-credentials_dict = dict(st.secrets["gcp_service_account"])
-creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
+creds_dict = dict(st.secrets["gcp_service_account"])
+creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
 client = gspread.authorize(creds)
+sheet = client.open("Task_Tracker").worksheet("Log")
 
-SHEET_NAME = "Task_Tracker"
-sheet = client.open(SHEET_NAME).worksheet("Log")
-
-# ---------------------
-# SETTINGS
-# ---------------------
+# ── SETTINGS ────────────────────────────────────────────────
 USERS = ["MQ", "Samo", "Bashe"]
 TASKS = ["10 YouTube Comment Replies", "Market Research"]
 TASKS_PER_DAY = len(TASKS)
-REQUIRED_COLUMNS = ["Timestamp", "User", "Date"] + TASKS + ["Role", "Action"]
+COLS = ["Timestamp", "User", "Date"] + TASKS + ["Role", "Action"]
 
-# Ensure headers exist
-if len(sheet.get_all_values()) == 0:
-    sheet.append_row(REQUIRED_COLUMNS)
+# ensure header row
+if not sheet.get_all_values():
+    sheet.append_row(COLS)
 
-# ---------------------
-# FUNCTIONS
-# ---------------------
+# ── HELPERS ─────────────────────────────────────────────────
 def load_logs():
-    data = sheet.get_all_records()
-    df = pd.DataFrame(data)
-    for col in REQUIRED_COLUMNS:
-        if col not in df.columns:
-            df[col] = None
+    df = pd.DataFrame(sheet.get_all_records())
+    for c in COLS:
+        if c not in df: df[c] = None
     if not df.empty:
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         for t in TASKS:
-            df[t] = df[t].astype(str).str.lower().isin(["true", "1", "yes"])
+            df[t] = df[t].astype(str).str.lower().isin(["true","1","yes"])
     return df
 
-def save_log(user, date, task_status, action="Log Updated"):
-    logs = load_logs()
-    date = pd.to_datetime(date)
-    if not logs.empty:
-        logs = logs[~((logs["User"] == user) & (logs["Date"].dt.date == date.date()))]
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    row_values = [timestamp, user, date.strftime("%Y-%m-%d")] + task_status + ["User", action]
-    new_row = pd.DataFrame([row_values], columns=REQUIRED_COLUMNS)
-    logs = pd.concat([logs, new_row], ignore_index=True)
+def save_log(user, date, status):
+    df = load_logs()
+    d = pd.to_datetime(date).date()
+    # drop any existing for that user+date
+    if not df.empty:
+        df = df[~((df["User"]==user)&(df["Date"].dt.date==d))]
+    row = [
+        datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        user,
+        date.strftime("%Y-%m-%d"),
+        *status,
+        "User",
+        "Log Updated"
+    ]
+    df = pd.concat([df, pd.DataFrame([row], columns=COLS)], ignore_index=True)
     sheet.clear()
-    sheet.update([logs.columns.tolist()] + logs.astype(str).values.tolist())
+    sheet.update([df.columns.tolist()]+df.astype(str).values.tolist())
 
-def calculate_fotmob_rating(progress):
-    return round(min(progress / 10, 10), 1)
+def fotmob(progress):
+    return round(min(progress/10,10),1)
 
-def calculate_streak(user_logs):
-    if user_logs.empty:
-        return 0
-    user_logs = user_logs.sort_values(by="Date").drop_duplicates(subset="Date")
-    streak = 0
-    prev = None
-    for _, row in user_logs.iterrows():
-        if all(row[t] for t in TASKS):
-            if prev and (row["Date"].date() - prev).days == 1:
-                streak += 1
+def streak(df):
+    if df.empty: return 0
+    d = df.sort_values("Date").drop_duplicates("Date")
+    s, prev = 0, None
+    for _,r in d.iterrows():
+        if all(r[t] for t in TASKS):
+            if prev and (r["Date"].date()-prev).days==1:
+                s+=1
             else:
-                streak = 1
-            prev = row["Date"].date()
-    return streak
+                s=1
+            prev = r["Date"].date()
+    return s
 
-# ---------------------
-# SIDEBAR FILTER
-# ---------------------
+# ── SIDEBAR FILTER ──────────────────────────────────────────
 with st.sidebar:
     st.subheader("⚙️ Settings")
-    selected_year = st.number_input("Select Year", value=datetime.date.today().year, step=1)
-    selected_month = st.number_input("Select Month", min_value=1, max_value=12,
-                                     value=datetime.date.today().month, step=1)
+    year = st.number_input("Year", value=datetime.date.today().year, step=1)
+    month = st.number_input("Month", 1,12, value=datetime.date.today().month, step=1)
+    logs_all = load_logs()
+    if not logs_all.empty:
+        st.download_button("💾 Download CSV",
+                           data=logs_all.to_csv(index=False).encode(),
+                           file_name="task_logs.csv")
 
-    logs_df_all = load_logs()
-    if not logs_df_all.empty:
-        st.download_button("💾 Download Data",
-                           data=logs_df_all.to_csv(index=False).encode('utf-8'),
-                           file_name="task_logs.csv", mime="text/csv")
-
-# ---------------------
-# LOG TASKS
-# ---------------------
+# ── TASK LOGGER ─────────────────────────────────────────────
 st.title("📊 Task Tracker")
 st.subheader("✅ Log Tasks")
-
-unlock = st.checkbox("🔓 Unlock Backfill Mode", value=False)
+unlock = st.checkbox("🔓 Unlock Backfill", False)
 today = datetime.date.today()
-selected_date = st.date_input("Select Date", value=today, min_value=today if not unlock else None)
+sel_date = st.date_input("Select Date", today, min_value=(None if unlock else today))
+if not unlock and sel_date!=today:
+    st.error("Backdating locked – enable unlock to backfill.")
 
-if not unlock and selected_date != today:
-    st.error("Backdating is locked. Enable unlock to choose another date.")
+for u in USERS:
+    st.markdown(f"### {u}")
+    c1,c2,c3 = st.columns([2,2,1])
+    s1 = c1.checkbox(TASKS[0], key=f"{u}_0_{sel_date}")
+    s2 = c2.checkbox(TASKS[1], key=f"{u}_1_{sel_date}")
+    if c3.button("Save", key=f"btn_{u}_{sel_date}"):
+        save_log(u, sel_date, [s1,s2])
+        st.success(f"✅ Saved for {u}")
 
-for user in USERS:
-    st.markdown(f"### {user}")
-    col1, col2, col3 = st.columns([2, 2, 1])
-    task_status = [col1.checkbox(TASKS[0], key=f"{user}_0_{selected_date}"),
-                   col2.checkbox(TASKS[1], key=f"{user}_1_{selected_date}")]
-    if col3.button("Save", key=f"save_{user}_{selected_date}"):
-        save_log(user, selected_date, task_status)
-        st.success(f"✅ Log updated for {user}")
-
-# ---------------------
-# DASHBOARD
-# ---------------------
-st.subheader(f"📈 Dashboard ({selected_month}/{selected_year})")
-logs_df_filtered = logs_df_all[(logs_df_all["Date"].dt.year == selected_year) &
-                                (logs_df_all["Date"].dt.month == selected_month)]
-
-if logs_df_filtered.empty:
-    st.info("No logs yet for this month.")
+# ── DASHBOARD ──────────────────────────────────────────────
+st.subheader(f"📈 Dashboard ({month}/{year})")
+logs = load_logs()
+df = logs[(logs["Date"].dt.year==year)&(logs["Date"].dt.month==month)]
+if df.empty:
+    st.info("No logs this month.")
 else:
+    first = df["Date"].min().date()
+    days_active = max((today-first).days+1,1)
+    max_tasks = days_active*TASKS_PER_DAY
+
     summary = []
-    today = datetime.date.today()
-
-    # Max days = days since first log this month
-    first_log_in_month = logs_df_filtered["Date"].min().date() if not logs_df_filtered.empty else today
-    days_active = max((today - first_log_in_month).days + 1, 1)
-    theoretical_max = days_active * TASKS_PER_DAY
-
-    for user in USERS:
-        user_logs = logs_df_filtered[logs_df_filtered["User"] == user].copy()
-        completed = int(user_logs[TASKS].sum(axis=1).sum()) if not user_logs.empty else 0
-        missed = max(theoretical_max - completed, 0)
-        progress = (completed / theoretical_max) * 100 if theoretical_max > 0 else 0
-        rating = calculate_fotmob_rating(progress)
-        streak = calculate_streak(user_logs)
-
+    for u in USERS:
+        ulog = df[df["User"]==u]
+        done = int(ulog[TASKS].sum().sum()) if not ulog.empty else 0
+        done = min(done, max_tasks)
+        remain = max_tasks - done
+        prog = (done/max_tasks)*100 if max_tasks else 0
+        rating = fotmob(prog)
         summary.append({
-            "User": user,
-            "Tasks Done": completed,
-            "Remaining": missed,
-            "Streak": f"🔥 {streak}-day",
-            "Rating": rating
+            "User":u,
+            "Tasks Done":done,
+            "Remaining":remain,
+            "Streak":f"🔥 {streak(ulog)}-day",
+            "Rating":rating
         })
 
-    summary_df = pd.DataFrame(summary).sort_values(by="Rating", ascending=False)
+    sum_df = pd.DataFrame(summary).set_index("User")
+    st.table(sum_df)  # native Streamlit table
 
-    # KPIs
-    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
-    col_kpi1.metric("🏆 Best Performer", summary_df.iloc[0]["User"])
-    col_kpi2.metric("📊 Avg Rating", f"{summary_df['Rating'].mean():.1f}")
-    col_kpi3.metric("✅ Total Done", int(summary_df["Tasks Done"].sum()))
-    col_kpi4.metric("❌ Total Missed", int(summary_df["Remaining"].sum()))
-
-    # Styled table
-    def color_for_rating(val):
-        return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
-
-    table_html = """
-    <style>
-        table {width:100%; border-collapse: collapse; margin-top:10px;}
-        th, td {padding:10px; text-align:center; border-bottom:1px solid #444;}
-        th {background:#222; color:#fff;}
-    </style>
-    <table>
-        <tr>
-            <th>User</th><th>Tasks Done</th><th>Remaining</th><th>Streak</th><th>Rating</th>
-        </tr>
-    """
-    for _, row in summary_df.iterrows():
-        color = color_for_rating(row["Rating"])
-        table_html += f"""
-        <tr>
-            <td>{row['User']}</td>
-            <td>{row['Tasks Done']}</td>
-            <td>{row['Remaining']}</td>
-            <td>{row['Streak']}</td>
-            <td style="background:{color};color:white;font-weight:bold;">{row['Rating']:.1f}</td>
-        </tr>
-        """
-    table_html += "</table>"
-
-    st.markdown(table_html, unsafe_allow_html=True)
-
-    # Charts
-    col1, col2 = st.columns([2, 2])
-    with col1:
-        st.plotly_chart(px.bar(summary_df, x="Rating", y="User", orientation="h",
-                               title="Leaderboard (Rating)", color="Rating",
-                               color_continuous_scale=[[0, "red"], [0.6, "yellow"], [1, "green"]],
-                               range_color=[0, 10]), use_container_width=True)
-    with col2:
-        st.plotly_chart(px.bar(summary_df.melt(id_vars="User", value_vars=["Tasks Done", "Remaining"]),
-                               x="value", y="User", color="variable", barmode="group",
-                               title="Tasks Done vs Remaining"), use_container_width=True)
-
-    # Daily Trend
-    daily_df = logs_df_filtered.copy()
-    daily_df["Day"] = daily_df["Date"].dt.date
-    daily_df["Completed Tasks"] = daily_df[TASKS].sum(axis=1)
-    trend_df = daily_df.groupby(["Day", "User"])["Completed Tasks"].sum().reset_index()
-    st.plotly_chart(px.line(trend_df, x="Day", y="Completed Tasks", color="User",
-                             title="📈 Daily Task Completion Trend", markers=True), use_container_width=True)
-
-    # Task Distribution
-    total_tasks = {t: logs_df_filtered[t].sum() for t in TASKS}
-    st.plotly_chart(px.pie(names=list(total_tasks.keys()), values=list(total_tasks.values()),
-                           title="📊 Task Distribution"), use_container_width=True)
+    # Charts below...
+    colA,colB = st.columns(2)
+    with colA:
+        fig = px.bar(sum_df.reset_index(), x="Rating", y="User", orientation="h",
+                     title="Leaderboard", color="Rating",
+                     color_continuous_scale=[[0,"red"],[0.6,"yellow"],[1,"green"]], range_color=[0,10])
+        st.plotly_chart(fig, use_container_width=True)
+    with colB:
+        fig2 = px.bar(sum_df.reset_index().melt(id_vars="User", value_vars=["Tasks Done","Remaining"]),
+                      x="value",y="User",color="variable",barmode="group",
+                      title="Done vs Remaining")
+        st.plotly_chart(fig2, use_container_width=True)
