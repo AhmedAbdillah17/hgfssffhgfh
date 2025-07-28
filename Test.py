@@ -75,21 +75,18 @@ def calculate_fotmob_rating(progress):
 def calculate_streak(user_logs):
     if user_logs.empty:
         return 0
-    user_logs = user_logs.sort_values(by="Date")
+    user_logs = user_logs.sort_values(by="Date").drop_duplicates(subset="Date")
     streak = 0
     max_streak = 0
     previous_date = None
     for _, row in user_logs.iterrows():
-        if all(row[t] for t in TASKS):
+        if all(row[t] for t in TASKS):  # Full completion day
             if previous_date and (row["Date"].date() - previous_date).days == 1:
                 streak += 1
             else:
                 streak = 1
             previous_date = row["Date"].date()
             max_streak = max(max_streak, streak)
-        else:
-            previous_date = None
-            streak = 0
     return max_streak
 
 # ---------------------
@@ -111,11 +108,9 @@ with st.sidebar:
 st.title("📊 Task Tracker")
 st.subheader("✅ Log Tasks")
 
-# Lock/Unlock toggle
 unlock = st.checkbox("🔓 Unlock Backfill Mode", value=False)
 today_date = datetime.date.today()
 
-# Date selector
 selected_date = st.date_input("Select Date", value=today_date, min_value=today_date if not unlock else None)
 if not unlock and selected_date != today_date:
     st.error("Backdating is locked. Enable unlock to choose another date.")
@@ -123,12 +118,8 @@ if not unlock and selected_date != today_date:
 for user in USERS:
     st.markdown(f"### {user}")
     col1, col2, col3 = st.columns([2, 2, 1])
-    task_status = []
-    for i, task in enumerate(TASKS):
-        if i == 0:
-            task_status.append(col1.checkbox(task, key=f"{user}_{i}_{selected_date}"))
-        else:
-            task_status.append(col2.checkbox(task, key=f"{user}_{i}_{selected_date}"))
+    task_status = [col1.checkbox(TASKS[0], key=f"{user}_0_{selected_date}"),
+                   col2.checkbox(TASKS[1], key=f"{user}_1_{selected_date}")]
     if col3.button("Save", key=f"save_{user}_{selected_date}"):
         save_log(user, selected_date, task_status)
         st.success(f"✅ Log updated for {user}")
@@ -152,10 +143,8 @@ else:
         if user_logs.empty:
             completed, missed, streak, rating = 0, 0, 0, 0
         else:
-            # Days active since global start minus grace
             active_days = max((today - global_first_log).days + 1 - grace_days, 1)
-            # Completed tasks
-            completed = int(user_logs[TASKS].sum(axis=1).sum())  # FIXED logic
+            completed = int(user_logs[TASKS].sum(axis=1).sum())  # Count all task completions
             theoretical_max = active_days * TASKS_PER_DAY
             completed = min(completed, theoretical_max)
             missed = max(theoretical_max - completed, 0)
@@ -173,18 +162,39 @@ else:
 
     summary_df = pd.DataFrame(summary).sort_values(by="Rating", ascending=False)
 
-    # Apply FotMob-style colors to Rating
-    def color_rating(val):
+    # Create custom HTML table with colors + centered text
+    def color_for_rating(val):
         if val >= 7:
-            return 'background-color: #28a745; color: white;'
+            return '#28a745'  # green
         elif val >= 4:
-            return 'background-color: #ffc107; color: black;'
-        else:
-            return 'background-color: #dc3545; color: white;'
+            return '#ffc107'  # yellow
+        return '#dc3545'     # red
 
-    st.dataframe(summary_df.style.hide(axis="index")
-                 .applymap(color_rating, subset=["Rating"])
-                 .format({"Rating": "{:.1f}"}), use_container_width=True)
+    table_html = """
+    <style>
+        table {width:100%; border-collapse: collapse;}
+        th, td {padding:10px; text-align:center; border-bottom:1px solid #444;}
+        th {background:#222; color:#fff;}
+    </style>
+    <table>
+        <tr>
+            <th>User</th><th>Tasks Done</th><th>Remaining</th><th>Streak</th><th>Rating</th>
+        </tr>
+    """
+    for _, row in summary_df.iterrows():
+        color = color_for_rating(row["Rating"])
+        table_html += f"""
+        <tr>
+            <td>{row['User']}</td>
+            <td>{row['Tasks Done']}</td>
+            <td>{row['Remaining']}</td>
+            <td>{row['Streak']}</td>
+            <td style="background-color:{color};color:white;font-weight:bold;">{row['Rating']:.1f}</td>
+        </tr>
+        """
+    table_html += "</table>"
+
+    st.markdown(table_html, unsafe_allow_html=True)
 
     # ---------------------
     # VISUALS
