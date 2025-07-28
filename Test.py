@@ -27,7 +27,6 @@ sheet = client.open(SHEET_NAME).worksheet("Log")
 USERS = ["MQ", "Samo", "Bashe"]
 TASKS = ["10 YouTube Comment Replies", "Market Research"]
 TASKS_PER_DAY = len(TASKS)
-GRACE_DAYS = 2
 REQUIRED_COLUMNS = ["Timestamp", "User", "Date"] + TASKS + ["Role", "Action"]
 
 # Ensure headers exist
@@ -69,17 +68,15 @@ def calculate_streak(user_logs):
         return 0
     user_logs = user_logs.sort_values(by="Date").drop_duplicates(subset="Date")
     streak = 0
-    max_streak = 0
     prev = None
     for _, row in user_logs.iterrows():
-        if all(row[t] for t in TASKS):  # Full completion
+        if all(row[t] for t in TASKS):
             if prev and (row["Date"].date() - prev).days == 1:
                 streak += 1
             else:
                 streak = 1
             prev = row["Date"].date()
-            max_streak = max(max_streak, streak)
-    return max_streak
+    return streak
 
 # ---------------------
 # SIDEBAR FILTER
@@ -129,21 +126,28 @@ if logs_df_filtered.empty:
     st.info("No logs yet for this month.")
 else:
     summary = []
-    global_first_log = logs_df_all["Date"].min().date() if not logs_df_all.empty else today
+    today = datetime.date.today()
+
+    # Max days = days since first log this month
+    if not logs_df_filtered.empty:
+        first_log_in_month = logs_df_filtered["Date"].min().date()
+        days_active = max((today - first_log_in_month).days + 1, 1)
+    else:
+        days_active = 1
+
+    theoretical_max = days_active * TASKS_PER_DAY
 
     for user in USERS:
         user_logs = logs_df_filtered[logs_df_filtered["User"] == user].copy()
         if user_logs.empty:
-            completed, missed, rating, streak = 0, 0, 0, 0
+            completed = 0
         else:
-            active_days = max((today - global_first_log).days + 1 - GRACE_DAYS, 1)
             completed = int(user_logs[TASKS].sum(axis=1).sum())
-            theoretical_max = active_days * TASKS_PER_DAY
-            completed = min(completed, theoretical_max)
-            missed = max(theoretical_max - completed, 0)
-            progress = (completed / theoretical_max) * 100 if theoretical_max > 0 else 0
-            rating = calculate_fotmob_rating(progress)
-            streak = calculate_streak(user_logs)
+
+        missed = max(theoretical_max - completed, 0)
+        progress = (completed / theoretical_max) * 100 if theoretical_max > 0 else 0
+        rating = calculate_fotmob_rating(progress)
+        streak = calculate_streak(user_logs)
 
         summary.append({
             "User": user,
@@ -155,25 +159,21 @@ else:
 
     summary_df = pd.DataFrame(summary).sort_values(by="Rating", ascending=False)
 
-    # ---------------------
     # KPIs
-    # ---------------------
     col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
     col_kpi1.metric("🏆 Best Performer", summary_df.iloc[0]["User"])
     col_kpi2.metric("📊 Avg Rating", f"{summary_df['Rating'].mean():.1f}")
     col_kpi3.metric("✅ Total Done", int(summary_df["Tasks Done"].sum()))
     col_kpi4.metric("❌ Total Missed", int(summary_df["Remaining"].sum()))
 
-    # ---------------------
-    # CUSTOM HTML TABLE
-    # ---------------------
+    # Create custom HTML table with colors
     def color_for_rating(val):
         return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
 
     table_html = """
     <style>
-        table {width:100%; border-collapse: collapse; margin-top:15px;}
-        th, td {padding:10px; text-align:center; border-bottom:1px solid #444; font-size:16px;}
+        table {width:100%; border-collapse: collapse; margin-top:10px;}
+        th, td {padding:10px; text-align:center; border-bottom:1px solid #444;}
         th {background:#222; color:#fff;}
     </style>
     <table>
@@ -195,9 +195,7 @@ else:
     table_html += "</table>"
     st.markdown(table_html, unsafe_allow_html=True)
 
-    # ---------------------
-    # VISUALS
-    # ---------------------
+    # Charts
     col1, col2 = st.columns([2, 2])
     with col1:
         st.plotly_chart(px.bar(summary_df, x="Rating", y="User", orientation="h",
