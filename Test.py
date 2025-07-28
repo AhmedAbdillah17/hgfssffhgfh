@@ -25,12 +25,12 @@ sheet = client.open(SHEET_NAME).worksheet("Log")
 # SETTINGS
 # ---------------------
 USERS = ["MQ", "Samo", "Bashe"]
-ROLES = {u: "User" for u in USERS}
 TASKS = ["10 YouTube Comment Replies", "Market Research"]
 TASKS_PER_DAY = len(TASKS)
 REQUIRED_COLUMNS = ["Timestamp", "User", "Date"] + TASKS + ["Role", "Action"]
+GRACE_DAYS = 2  # global grace period
 
-# Ensure headers
+# Ensure headers exist
 if len(sheet.get_all_values()) == 0:
     sheet.append_row(REQUIRED_COLUMNS)
 
@@ -55,19 +55,11 @@ def save_log(user, date, task_status, action="Log Updated"):
     if not logs.empty:
         logs = logs[~((logs["User"] == user) & (logs["Date"].dt.date == date.date()))]
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    role = ROLES.get(user, "User")
-    row_values = [timestamp, user, date.strftime("%Y-%m-%d")] + task_status + [role, action]
+    row_values = [timestamp, user, date.strftime("%Y-%m-%d")] + task_status + ["User", action]
     new_row = pd.DataFrame([row_values], columns=REQUIRED_COLUMNS)
     logs = pd.concat([logs, new_row], ignore_index=True)
     sheet.clear()
     sheet.update([logs.columns.tolist()] + logs.astype(str).values.tolist())
-
-def get_filtered_logs(year, month):
-    logs_df = load_logs()
-    if logs_df.empty:
-        return logs_df
-    logs_df = logs_df.dropna(subset=["Date"])
-    return logs_df[(logs_df["Date"].dt.year == year) & (logs_df["Date"].dt.month == month)]
 
 def calculate_fotmob_rating(progress):
     return round(min(progress / 10, 10), 1)
@@ -78,28 +70,30 @@ def calculate_streak(user_logs):
     user_logs = user_logs.sort_values(by="Date").drop_duplicates(subset="Date")
     streak = 0
     max_streak = 0
-    previous_date = None
+    prev = None
     for _, row in user_logs.iterrows():
-        if all(row[t] for t in TASKS):  # Full completion day
-            if previous_date and (row["Date"].date() - previous_date).days == 1:
+        if all(row[t] for t in TASKS):
+            if prev and (row["Date"].date() - prev).days == 1:
                 streak += 1
             else:
                 streak = 1
-            previous_date = row["Date"].date()
+            prev = row["Date"].date()
             max_streak = max(max_streak, streak)
     return max_streak
 
 # ---------------------
-# SIDEBAR FILTERS
+# SIDEBAR FILTER
 # ---------------------
 with st.sidebar:
     st.subheader("⚙️ Settings")
     selected_year = st.number_input("Select Year", value=datetime.date.today().year, step=1)
-    selected_month = st.number_input("Select Month", min_value=1, max_value=12, value=datetime.date.today().month, step=1)
+    selected_month = st.number_input("Select Month", min_value=1, max_value=12,
+                                     value=datetime.date.today().month, step=1)
 
     logs_df_all = load_logs()
     if not logs_df_all.empty:
-        st.download_button(label="💾 Download Data", data=logs_df_all.to_csv(index=False).encode('utf-8'),
+        st.download_button("💾 Download Data",
+                           data=logs_df_all.to_csv(index=False).encode('utf-8'),
                            file_name="task_logs.csv", mime="text/csv")
 
 # ---------------------
@@ -109,10 +103,10 @@ st.title("📊 Task Tracker")
 st.subheader("✅ Log Tasks")
 
 unlock = st.checkbox("🔓 Unlock Backfill Mode", value=False)
-today_date = datetime.date.today()
+today = datetime.date.today()
+selected_date = st.date_input("Select Date", value=today, min_value=today if not unlock else None)
 
-selected_date = st.date_input("Select Date", value=today_date, min_value=today_date if not unlock else None)
-if not unlock and selected_date != today_date:
+if not unlock and selected_date != today:
     st.error("Backdating is locked. Enable unlock to choose another date.")
 
 for user in USERS:
@@ -128,90 +122,71 @@ for user in USERS:
 # DASHBOARD
 # ---------------------
 st.subheader(f"📈 Dashboard ({selected_month}/{selected_year})")
-logs_df_filtered = get_filtered_logs(selected_year, selected_month)
+logs_df_filtered = logs_df_all[(logs_df_all["Date"].dt.year == selected_year) &
+                                (logs_df_all["Date"].dt.month == selected_month)]
 
 if logs_df_filtered.empty:
     st.info("No logs yet for this month.")
 else:
     summary = []
-    today = datetime.date.today()
     global_first_log = logs_df_all["Date"].min().date() if not logs_df_all.empty else today
-    grace_days = 2
-
     for user in USERS:
         user_logs = logs_df_filtered[logs_df_filtered["User"] == user].copy()
         if user_logs.empty:
-            completed, missed, streak, rating = 0, 0, 0, 0
+            completed, missed, rating, streak = 0, 0, 0, 0
         else:
-            active_days = max((today - global_first_log).days + 1 - grace_days, 1)
-            completed = int(user_logs[TASKS].sum(axis=1).sum())  # Count all task completions
+            active_days = max((today - global_first_log).days + 1 - GRACE_DAYS, 1)
+            completed = int(user_logs[TASKS].sum(axis=1).sum())
             theoretical_max = active_days * TASKS_PER_DAY
             completed = min(completed, theoretical_max)
             missed = max(theoretical_max - completed, 0)
             progress = (completed / theoretical_max) * 100 if theoretical_max > 0 else 0
             rating = calculate_fotmob_rating(progress)
             streak = calculate_streak(user_logs)
-
-        summary.append({
-            "User": user,
-            "Tasks Done": completed,
-            "Remaining": missed,
-            "Streak": f"🔥 {streak}-day" if streak > 0 else "🔥 0-day",
-            "Rating": rating
-        })
+        summary.append({"User": user, "Tasks Done": completed, "Remaining": missed,
+                        "Streak": f"🔥 {streak}-day", "Rating": rating})
 
     summary_df = pd.DataFrame(summary).sort_values(by="Rating", ascending=False)
 
-    # Create custom HTML table with colors + centered text
-    def color_for_rating(val):
-        if val >= 7:
-            return '#28a745'  # green
-        elif val >= 4:
-            return '#ffc107'  # yellow
-        return '#dc3545'     # red
+    # KPIs
+    col_kpi1, col_kpi2, col_kpi3, col_kpi4 = st.columns(4)
+    col_kpi1.metric("🏆 Best Performer", summary_df.iloc[0]["User"])
+    col_kpi2.metric("📊 Avg Rating", f"{summary_df['Rating'].mean():.1f}")
+    col_kpi3.metric("✅ Total Done", int(summary_df["Tasks Done"].sum()))
+    col_kpi4.metric("❌ Total Missed", int(summary_df["Remaining"].sum()))
 
-    table_html = """
-    <style>
-        table {width:100%; border-collapse: collapse;}
-        th, td {padding:10px; text-align:center; border-bottom:1px solid #444;}
-        th {background:#222; color:#fff;}
-    </style>
-    <table>
-        <tr>
-            <th>User</th><th>Tasks Done</th><th>Remaining</th><th>Streak</th><th>Rating</th>
-        </tr>
-    """
+    # Custom Styled Table
+    def color_for_rating(val):
+        return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
+    table_html = """<style>table{width:100%;border-collapse:collapse;}
+        th,td{padding:10px;text-align:center;border-bottom:1px solid #444;}th{background:#222;color:#fff;}</style>
+        <table><tr><th>User</th><th>Tasks Done</th><th>Remaining</th><th>Streak</th><th>Rating</th></tr>"""
     for _, row in summary_df.iterrows():
-        color = color_for_rating(row["Rating"])
-        table_html += f"""
-        <tr>
-            <td>{row['User']}</td>
-            <td>{row['Tasks Done']}</td>
-            <td>{row['Remaining']}</td>
-            <td>{row['Streak']}</td>
-            <td style="background-color:{color};color:white;font-weight:bold;">{row['Rating']:.1f}</td>
-        </tr>
-        """
+        table_html += f"<tr><td>{row['User']}</td><td>{row['Tasks Done']}</td><td>{row['Remaining']}</td><td>{row['Streak']}</td><td style='background:{color_for_rating(row['Rating'])};color:#fff;font-weight:bold;'>{row['Rating']:.1f}</td></tr>"
     table_html += "</table>"
-# ---------------------
-# CUSTOM HTML TABLE RENDER
-# ---------------------
     st.markdown(table_html, unsafe_allow_html=True)
-   
-    # ---------------------
-    # VISUALS
-    # ---------------------
+
+    # Charts
     col1, col2 = st.columns([2, 2])
     with col1:
-        fig_rating = px.bar(summary_df, x="Rating", y="User", orientation="h",
-                            title="Leaderboard (Rating)",
-                            color="Rating",
-                            color_continuous_scale=[[0, "red"], [0.6, "yellow"], [1, "green"]],
-                            range_color=[0, 10])
-        st.plotly_chart(fig_rating, use_container_width=True)
-
+        st.plotly_chart(px.bar(summary_df, x="Rating", y="User", orientation="h",
+                               title="Leaderboard (Rating)", color="Rating",
+                               color_continuous_scale=[[0, "red"], [0.6, "yellow"], [1, "green"]],
+                               range_color=[0, 10]), use_container_width=True)
     with col2:
-        fig_tasks = px.bar(summary_df.melt(id_vars="User", value_vars=["Tasks Done", "Remaining"]),
-                           x="value", y="User", color="variable",
-                           barmode="group", title="Tasks Done vs Remaining")
-        st.plotly_chart(fig_tasks, use_container_width=True)
+        st.plotly_chart(px.bar(summary_df.melt(id_vars="User", value_vars=["Tasks Done", "Remaining"]),
+                               x="value", y="User", color="variable", barmode="group",
+                               title="Tasks Done vs Remaining"), use_container_width=True)
+
+    # Daily Trend
+    daily_df = logs_df_filtered.copy()
+    daily_df["Day"] = daily_df["Date"].dt.date
+    daily_df["Completed Tasks"] = daily_df[TASKS].sum(axis=1)
+    trend_df = daily_df.groupby(["Day", "User"])["Completed Tasks"].sum().reset_index()
+    st.plotly_chart(px.line(trend_df, x="Day", y="Completed Tasks", color="User",
+                             title="📈 Daily Task Completion Trend", markers=True), use_container_width=True)
+
+    # Task Distribution
+    total_tasks = {t: logs_df_filtered[t].sum() for t in TASKS}
+    st.plotly_chart(px.pie(names=list(total_tasks.keys()), values=list(total_tasks.values()),
+                           title="📊 Task Distribution"), use_container_width=True)
