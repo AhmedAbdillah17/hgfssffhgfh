@@ -26,8 +26,13 @@ TASKS         = ["10 YouTube Comment Replies", "Market Research"]
 TASKS_PER_DAY = len(TASKS)
 COLS          = ["Timestamp", "User", "Date"] + TASKS + ["Role", "Action"]
 
-# ensure header
-if not sheet.get_all_values():
+# ── ENSURE HEADER ROW EXISTS ─────────────────────────────────
+try:
+    existing = sheet.get_all_values()
+except gspread.exceptions.APIError:
+    existing = []
+
+if not existing:
     sheet.append_row(COLS)
 
 # ── HELPERS ─────────────────────────────────────────────────
@@ -35,34 +40,28 @@ def load_logs():
     data = sheet.get_all_records()
     df   = pd.DataFrame(data)
 
-    # make sure every column exists
+    # ensure every column is present
     for c in COLS:
         if c not in df:
             df[c] = None
 
     if not df.empty:
-        # parse everything as real datetime
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
         df["Date"]      = pd.to_datetime(df["Date"],      errors="coerce")
-
-        # fill any missing Date with the normalized Timestamp
+        # backfill any NaT dates from the timestamp
         mask = df["Date"].isna() & df["Timestamp"].notna()
         df.loc[mask, "Date"] = df.loc[mask, "Timestamp"].dt.normalize()
-
-        # convert task flags into booleans
+        # convert flags
         for t in TASKS:
             df[t] = df[t].astype(str).str.lower().isin(["true","1","yes"])
-
     return df
 
 def save_log(user, date, status):
     df = load_logs()
     d  = pd.to_datetime(date)
-
-    # drop existing for that user+date
+    # remove existing for that user+date
     if not df.empty:
         df = df[~((df.User==user) & (df.Date.dt.date==d.date()))]
-
     row = [
         datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         user,
@@ -72,13 +71,11 @@ def save_log(user, date, status):
         "Log Updated",
     ]
     df = pd.concat([df, pd.DataFrame([row], columns=COLS)], ignore_index=True)
-
-    # write back
     sheet.clear()
     sheet.update([df.columns.tolist()] + df.astype(str).values.tolist())
 
 def fotmob(progress):
-    return round(min(progress/10, 10), 1)
+    return round(min(progress/10,10),1)
 
 def streak(user_df):
     if user_df.empty:
@@ -99,7 +96,7 @@ def streak(user_df):
 with st.sidebar:
     st.subheader("⚙️ Settings")
     sel_year  = st.number_input("Year",  value=datetime.date.today().year, step=1)
-    sel_month = st.number_input("Month", 1,12, value=datetime.date.today().month, step=1)
+    sel_month = st.number_input("Month",1,12, value=datetime.date.today().month, step=1)
 
     logs_all = load_logs()
     if not logs_all.empty:
@@ -133,16 +130,8 @@ for u in USERS:
 
 # ── DASHBOARD ──────────────────────────────────────────────
 st.subheader(f"📈 Dashboard ({sel_month}/{sel_year})")
-logs = load_logs()
-
-# drop any rows where Date truly could not parse
-logs = logs.dropna(subset=["Date"])
-
-# now safe to do .dt.year / .dt.month
-mth = logs[
-    (logs.Date.dt.year == sel_year) &
-    (logs.Date.dt.month== sel_month)
-]
+logs = load_logs().dropna(subset=["Date"])
+mth  = logs[(logs.Date.dt.year==sel_year)&(logs.Date.dt.month==sel_month)]
 
 if mth.empty:
     st.info("No logs for this month.")
