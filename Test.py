@@ -28,7 +28,7 @@ USERS = ["MQ", "Samo", "Bashe"]
 TASKS = ["10 YouTube Comment Replies", "Market Research"]
 TASKS_PER_DAY = len(TASKS)
 REQUIRED_COLUMNS = ["Timestamp", "User", "Date"] + TASKS + ["Role", "Action"]
-GRACE_DAYS = 2  # global grace period
+GRACE_DAYS = 2  # Global grace period for missed calculation
 
 # Ensure headers exist
 if len(sheet.get_all_values()) == 0:
@@ -81,6 +81,9 @@ def calculate_streak(user_logs):
             max_streak = max(max_streak, streak)
     return max_streak
 
+def color_for_rating(val):
+    return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
+
 # ---------------------
 # SIDEBAR FILTER
 # ---------------------
@@ -130,6 +133,7 @@ if logs_df_filtered.empty:
 else:
     summary = []
     global_first_log = logs_df_all["Date"].min().date() if not logs_df_all.empty else today
+
     for user in USERS:
         user_logs = logs_df_filtered[logs_df_filtered["User"] == user].copy()
         if user_logs.empty:
@@ -155,36 +159,31 @@ else:
     col_kpi3.metric("✅ Total Done", int(summary_df["Tasks Done"].sum()))
     col_kpi4.metric("❌ Total Missed", int(summary_df["Remaining"].sum()))
 
-    # Create custom HTML table with colors + centered text
-def color_for_rating(val):
-    return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
-
-table_html = """
-<style>
-    table {width:100%; border-collapse: collapse; margin-top:10px;}
-    th, td {padding:10px; text-align:center; border-bottom:1px solid #444;}
-    th {background:#222; color:#fff;}
-</style>
-<table>
-    <tr>
-        <th>User</th><th>Tasks Done</th><th>Remaining</th><th>Streak</th><th>Rating</th>
-    </tr>
-"""
-for _, row in summary_df.iterrows():
-    color = color_for_rating(row["Rating"])
-    table_html += f"""
-    <tr>
-        <td>{row['User']}</td>
-        <td>{row['Tasks Done']}</td>
-        <td>{row['Remaining']}</td>
-        <td>{row['Streak']}</td>
-        <td style="background:{color};color:white;font-weight:bold;">{row['Rating']:.1f}</td>
-    </tr>
-"""
-table_html += "</table>"
-
-# ✅ Render the styled HTML table
-st.markdown(table_html, unsafe_allow_html=True)
+    # Custom HTML Table
+    table_html = """
+    <style>
+        table {width:100%; border-collapse: collapse; margin-top:10px;}
+        th, td {padding:10px; text-align:center; border-bottom:1px solid #444;}
+        th {background:#222; color:#fff;}
+    </style>
+    <table>
+        <tr>
+            <th>User</th><th>Tasks Done</th><th>Remaining</th><th>Streak</th><th>Rating</th>
+        </tr>
+    """
+    for _, row in summary_df.iterrows():
+        color = color_for_rating(row["Rating"])
+        table_html += f"""
+        <tr>
+            <td>{row['User']}</td>
+            <td>{row['Tasks Done']}</td>
+            <td>{row['Remaining']}</td>
+            <td>{row['Streak']}</td>
+            <td style="background:{color};color:white;font-weight:bold;">{row['Rating']:.1f}</td>
+        </tr>
+        """
+    table_html += "</table>"
+    st.markdown(table_html, unsafe_allow_html=True)
 
     # Charts
     col1, col2 = st.columns([2, 2])
@@ -206,7 +205,7 @@ st.markdown(table_html, unsafe_allow_html=True)
     st.plotly_chart(px.line(trend_df, x="Day", y="Completed Tasks", color="User",
                              title="📈 Daily Task Completion Trend", markers=True), use_container_width=True)
 
-    # Task Distribution
+    # Task Distribution Pie
     total_tasks = {t: logs_df_filtered[t].sum() for t in TASKS}
     st.plotly_chart(px.pie(names=list(total_tasks.keys()), values=list(total_tasks.values()),
                            title="📊 Task Distribution"), use_container_width=True)
