@@ -5,37 +5,40 @@ import plotly.express as px
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime as dt
-import json
 
 # ---------------------
 # CONFIG
 # ---------------------
 st.set_page_config(page_title="Task Tracker", page_icon="✅", layout="wide")
 
-TASKS = ["10 YouTube Comment Replies", "Market Research"]
+# Define tasks and users
+TASKS = ["10 YouTube Comment Replies", "Market Research"]  # Add more tasks if needed
 TASKS_PER_DAY = len(TASKS)
 USERS = ["MQ", "Samo", "Bashe"]
 
 # ---------------------
 # GOOGLE SHEETS AUTH (SECURE)
 # ---------------------
-credentials = json.loads(st.secrets["gcp_service_account"])
+credentials = st.secrets["gcp_service_account"]  # ✅ FIXED
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials, scope)
 client = gspread.authorize(creds)
 
+# Sheet names
 SHEET_NAME = "Task_Tracker"
 AUDIT_SHEET_NAME = "Task_Audit"
+
+# Main sheet
 sheet = client.open(SHEET_NAME).sheet1
 
-# Audit sheet setup
+# Audit sheet
 try:
     audit_sheet = client.open(SHEET_NAME).worksheet(AUDIT_SHEET_NAME)
 except:
     audit_sheet = client.open(SHEET_NAME).add_worksheet(title=AUDIT_SHEET_NAME, rows="1000", cols="4")
     audit_sheet.append_row(["User", "Selected Date", "Timestamp", "Action"])
 
-# Ensure header exists
+# Ensure main sheet header exists
 if len(sheet.get_all_values()) == 0:
     sheet.append_row(["User", "Date"] + [f"Task{i+1}" for i in range(TASKS_PER_DAY)] + ["Timestamp"])
 
@@ -58,13 +61,14 @@ def delete_log(row_index, user, date):
     audit_sheet.append_row([user, date, timestamp, "Log Deleted"])
 
 # ---------------------
-# SIDEBAR
+# SIDEBAR SETTINGS
 # ---------------------
 with st.sidebar:
     st.subheader("⚙️ Settings")
     selected_year = st.number_input("Select Year", value=datetime.date.today().year, step=1)
     selected_month = st.number_input("Select Month", min_value=1, max_value=12, value=datetime.date.today().month, step=1)
 
+    # Download full logs
     logs_df_all = load_logs()
     if not logs_df_all.empty:
         st.download_button(
@@ -75,12 +79,12 @@ with st.sidebar:
         )
 
 # ---------------------
-# TASK ENTRY
+# TASK ENTRY SECTION
 # ---------------------
 st.markdown("<h1 style='text-align:center;'>📊 Task Tracker</h1>", unsafe_allow_html=True)
 st.subheader("✅ Log Tasks")
 
-# Date input restriction
+# Date restriction: only today or yesterday
 selected_date = st.date_input("Select Date", value=datetime.date.today())
 today = datetime.date.today()
 if selected_date < (today - datetime.timedelta(days=1)):
@@ -161,6 +165,28 @@ else:
             return f"background-color: {color}; color: white;"
 
         st.dataframe(summary_df.style.applymap(color_rating, subset=["Rating"]), use_container_width=True)
+
+        # Charts
+        col1, col2 = st.columns([2, 2])
+        with col1:
+            fig_bar = px.bar(summary_df, x="Progress %", y="User", orientation="h",
+                             title="Leaderboard by Progress %", color="Progress %", color_continuous_scale="Blues")
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+        with col2:
+            st.markdown("### 🍩 Completed vs Missed per User")
+            for user in USERS:
+                u_data = next((item for item in summary if item["User"] == user), None)
+                if u_data:
+                    comp = u_data["Tasks Done"]
+                    missed = u_data["Missed"]
+                    if comp == 0 and missed == 0:
+                        comp, missed = 0.01, 0.01
+                    fig = px.pie(values=[comp, missed], names=["Completed", "Missed"],
+                                 hole=0.6, title=user,
+                                 color_discrete_map={"Completed": "#00CC96", "Missed": "#EF553B"})
+                    fig.update_traces(textinfo="label+percent", sort=False)
+                    st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------
 # LOG MANAGEMENT
