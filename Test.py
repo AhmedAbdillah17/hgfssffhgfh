@@ -29,14 +29,12 @@ if dark_mode:
 # GOOGLE SHEETS AUTH
 # ---------------------
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-
-# ✅ Directly use st.secrets (NO newline replacement)
 credentials_dict = dict(st.secrets["gcp_service_account"])
 creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
 client = gspread.authorize(creds)
 
 SHEET_NAME = "Task_Tracker"
-sheet = client.open(SHEET_NAME).sheet1
+sheet = client.open(SHEET_NAME).worksheet("Log")
 
 # Ensure header exists
 if len(sheet.get_all_values()) == 0:
