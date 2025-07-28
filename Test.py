@@ -86,9 +86,7 @@ def get_filtered_logs(year, month):
 def calculate_fotmob_rating(progress):
     """Convert progress (0-100%) to FotMob-style rating (0-10)."""
     rating = (progress / 10)  # Scale
-    if rating > 10:
-        rating = 10
-    return round(rating, 1)
+    return round(min(rating, 10), 1)
 
 
 def calculate_streak(user_logs):
@@ -136,7 +134,12 @@ with st.sidebar:
 # ---------------------
 st.title("📊 Task Tracker")
 st.subheader("✅ Log Today's Tasks")
-selected_date = st.date_input("Select Date", value=datetime.date.today())
+
+today_date = datetime.date.today()
+
+# Restrict logging to today's date
+selected_date = today_date
+st.info(f"Logging is allowed for today only: **{today_date}**")
 
 for user in USERS:
     st.markdown(f"### {user}")
@@ -158,23 +161,28 @@ logs_df_filtered = get_filtered_logs(selected_year, selected_month)
 if logs_df_filtered.empty:
     st.info("No logs yet for this month.")
 else:
-    start_date = logs_df_filtered["Date"].min().date()
-    today = datetime.date.today()
-    days_in_range = (today - start_date).days + 1
-
     summary = []
     for user in USERS:
-        user_logs = logs_df_filtered[logs_df_filtered["User"] == user]
-        completed = sum(user_logs[t].astype(bool).sum() for t in TASKS)
-        missed = (days_in_range * TASKS_PER_DAY) - completed
-        progress = min((completed / (days_in_range * TASKS_PER_DAY)) * 100, 100)
-        streak = calculate_streak(user_logs)
+        user_logs = logs_df_filtered[logs_df_filtered["User"] == user].copy()
+        if user_logs.empty:
+            completed, missed, streak, rating = 0, 0, 0, 0
+        else:
+            # Only count missed after user's first activity
+            first_activity = user_logs["Date"].min().date()
+            today = datetime.date.today()
+            active_days = (today - first_activity).days + 1
+            completed = sum(user_logs[t].astype(bool).sum() for t in TASKS)
+            missed = max((active_days * TASKS_PER_DAY) - completed, 0)
+            progress = (completed / (active_days * TASKS_PER_DAY)) * 100 if active_days > 0 else 0
+            rating = calculate_fotmob_rating(progress)
+            streak = calculate_streak(user_logs)
+
         summary.append({
             "User": user,
             "Tasks Done": completed,
             "Remaining": missed,
             "Streak": f"🔥 {streak}-day" if streak > 0 else "🔥 0-day",
-            "Rating": calculate_fotmob_rating(progress)
+            "Rating": rating
         })
 
     summary_df = pd.DataFrame(summary).sort_values(by="Rating", ascending=False)
