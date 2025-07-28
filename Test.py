@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import datetime
+import calendar
 import plotly.express as px
 import gspread
 from google.oauth2.service_account import Credentials
@@ -14,8 +15,7 @@ scope = [
     "https://www.googleapis.com/auth/drive",
 ]
 creds = Credentials.from_service_account_info(
-    dict(st.secrets["gcp_service_account"]),
-    scopes=scope
+    dict(st.secrets["gcp_service_account"]), scopes=scope
 )
 client = gspread.authorize(creds)
 sheet  = client.open("Task_Tracker").worksheet("Log")
@@ -31,16 +31,13 @@ try:
     existing = sheet.get_all_values()
 except gspread.exceptions.APIError:
     existing = []
-
 if not existing:
     sheet.append_row(COLS)
 
 # ── HELPERS ─────────────────────────────────────────────────
-def load_logs():
-    data = sheet.get_all_records()
-    df   = pd.DataFrame(data)
-
-    # ensure every column is present
+def load_logs() -> pd.DataFrame:
+    """Fetch all rows, normalize types, fill missing Date from Timestamp."""
+    df = pd.DataFrame(sheet.get_all_records())
     for c in COLS:
         if c not in df:
             df[c] = None
@@ -48,61 +45,70 @@ def load_logs():
     if not df.empty:
         df["Timestamp"] = pd.to_datetime(df["Timestamp"], errors="coerce")
         df["Date"]      = pd.to_datetime(df["Date"],      errors="coerce")
-        # backfill any NaT dates from the timestamp
+        # any row where Date failed, backfill from Timestamp
         mask = df["Date"].isna() & df["Timestamp"].notna()
         df.loc[mask, "Date"] = df.loc[mask, "Timestamp"].dt.normalize()
-        # convert flags
+        # boolify task columns
         for t in TASKS:
-            df[t] = df[t].astype(str).str.lower().isin(["true","1","yes"])
+            df[t] = df[t].astype(str).str.lower().isin(["true", "1", "yes"])
     return df
 
-def save_log(user, date, status):
+def save_log(user: str, sel_date: datetime.date, status: list[bool]) -> None:
+    """Insert or overwrite a single user/date combination."""
     df = load_logs()
-    d  = pd.to_datetime(date)
-    # remove existing for that user+date
+    d  = pd.to_datetime(sel_date)
+    # drop any existing for that user+date
     if not df.empty:
         df = df[~((df.User==user) & (df.Date.dt.date==d.date()))]
-    row = [
+
+    new_row = [
         datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         user,
         d.strftime("%Y-%m-%d"),
         *status,
         "User",
-        "Log Updated",
+        "Log Updated"
     ]
-    df = pd.concat([df, pd.DataFrame([row], columns=COLS)], ignore_index=True)
+    df = pd.concat([df, pd.DataFrame([new_row], columns=COLS)], ignore_index=True)
+
+    # rewrite entire sheet in one go
     sheet.clear()
     sheet.update([df.columns.tolist()] + df.astype(str).values.tolist())
 
-def fotmob(progress):
-    return round(min(progress/10,10),1)
+def fotmob_rating(percentage: float) -> float:
+    """Scale 0–100% down to 0–10."""
+    return round(min(percentage/10, 10), 1)
 
-def streak(user_df):
+def compute_streak(user_df: pd.DataFrame) -> int:
+    """Duolingo-style streak: consecutive full-task days."""
     if user_df.empty:
         return 0
     uniq = user_df.sort_values("Date").drop_duplicates("Date")
-    s, prev, best = 0, None, 0
+    best = 0
+    cur  = 0
+    prev = None
     for _, r in uniq.iterrows():
         if all(r[t] for t in TASKS):
-            if prev and (r.Date.date()-prev).days==1:
-                s += 1
+            today = r.Date.date()
+            if prev and (today - prev).days == 1:
+                cur += 1
             else:
-                s = 1
-            prev = r.Date.date()
-            best = max(best, s)
+                cur = 1
+            prev  = today
+            best  = max(best, cur)
     return best
 
 # ── SIDEBAR FILTER ─────────────────────────────────────────
 with st.sidebar:
     st.subheader("⚙️ Settings")
     sel_year  = st.number_input("Year",  value=datetime.date.today().year, step=1)
-    sel_month = st.number_input("Month",1,12, value=datetime.date.today().month, step=1)
+    sel_month = st.number_input("Month", 1,12, value=datetime.date.today().month, step=1)
 
-    logs_all = load_logs()
-    if not logs_all.empty:
+    full = load_logs()
+    if not full.empty:
         st.download_button(
             "💾 Download CSV",
-            data=logs_all.to_csv(index=False).encode("utf-8"),
+            data=full.to_csv(index=False).encode("utf-8"),
             file_name="task_logs.csv",
             mime="text/csv"
         )
@@ -117,52 +123,62 @@ min_date   = None if unlock else today_date
 sel_date   = st.date_input("Select Date", value=today_date, min_value=min_date)
 
 if not unlock and sel_date != today_date:
-    st.error("⛔ Backdating is locked. Enable unlock to choose another date.")
+    st.error("⛔ Backdating locked. Toggle unlock to choose another date.")
 
 for u in USERS:
     st.markdown(f"### {u}")
     c1,c2,c3 = st.columns([2,2,1])
     s1 = c1.checkbox(TASKS[0], key=f"{u}_0_{sel_date}")
     s2 = c2.checkbox(TASKS[1], key=f"{u}_1_{sel_date}")
-    if c3.button("Save", key=f"btn_{u}_{sel_date}"):
-        save_log(u, sel_date, [s1,s2])
+    if c3.button("Save", key=f"save_{u}_{sel_date}"):
+        save_log(u, sel_date, [s1, s2])
         st.success(f"✅ Logged for {u}")
 
 # ── DASHBOARD ──────────────────────────────────────────────
 st.subheader(f"📈 Dashboard ({sel_month}/{sel_year})")
-logs = load_logs().dropna(subset=["Date"])
-mth  = logs[(logs.Date.dt.year==sel_year)&(logs.Date.dt.month==sel_month)]
 
-if mth.empty:
+logs = load_logs().dropna(subset=["Date"])
+month_logs = logs[
+    (logs.Date.dt.year  == sel_year) &
+    (logs.Date.dt.month == sel_month)
+]
+
+if month_logs.empty:
     st.info("No logs for this month.")
 else:
-    first_day = mth.Date.min().date()
-    days      = (today_date - first_day).days + 1
-    max_tasks = days * TASKS_PER_DAY
+    # compute number of days we want to measure against:
+    # if viewing current month, use today.day
+    # otherwise use full days in that month
+    if sel_year == today_date.year and sel_month == today_date.month:
+        days_count = today_date.day
+    else:
+        days_count = calendar.monthrange(sel_year, sel_month)[1]
 
-    rows = []
+    max_tasks = days_count * TASKS_PER_DAY
+
+    summary = []
     for u in USERS:
-        udf    = mth[mth.User==u]
-        done   = int(udf[TASKS].sum().sum()) if not udf.empty else 0
+        udf    = month_logs[month_logs.User==u]
+        done   = int(udf[TASKS].sum(axis=1).sum())  # total tasks checked
         done   = min(done, max_tasks)
         missed = max(max_tasks - done, 0)
-        prog   = (done/max_tasks)*100 if max_tasks else 0
-        rows.append({
+        pct    = (done / max_tasks) * 100 if max_tasks else 0
+        summary.append({
             "User":       u,
             "Tasks Done": done,
             "Remaining":  missed,
-            "Streak":     f"🔥 {streak(udf)}-day",
-            "Rating":     fotmob(prog),
+            "Streak":     f"🔥 {compute_streak(udf)}-day",
+            "Rating":     fotmob_rating(pct),
         })
 
-    summary_df = pd.DataFrame(rows).set_index("User")
-    st.table(summary_df)
+    df_summary = pd.DataFrame(summary).set_index("User")
+    st.table(df_summary)
 
-    # two clean charts
+    # Charts
     cA, cB = st.columns(2)
     with cA:
         fig = px.bar(
-            summary_df.reset_index(),
+            df_summary.reset_index(),
             x="Rating", y="User",
             orientation="h",
             color="Rating",
@@ -171,12 +187,15 @@ else:
             title="🏆 Leaderboard"
         )
         st.plotly_chart(fig, use_container_width=True)
+
     with cB:
+        tidy = (
+            df_summary
+            .reset_index()
+            .melt(id_vars="User", value_vars=["Tasks Done","Remaining"])
+        )
         fig2 = px.bar(
-            summary_df.reset_index().melt(
-                id_vars="User",
-                value_vars=["Tasks Done","Remaining"]
-            ),
+            tidy,
             x="value", y="User",
             color="variable",
             barmode="group",
