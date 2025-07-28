@@ -86,8 +86,31 @@ def get_filtered_logs(year, month):
 def calculate_fotmob_rating(progress):
     """Convert progress (0-100%) to FotMob-style rating (0-10)."""
     rating = (progress / 10)  # Scale
-    if rating > 10: rating = 10
+    if rating > 10:
+        rating = 10
     return round(rating, 1)
+
+
+def calculate_streak(user_logs):
+    """Calculate Duolingo-style streak (consecutive days with full completion)."""
+    if user_logs.empty:
+        return 0
+    user_logs = user_logs.sort_values(by="Date")
+    streak = 0
+    max_streak = 0
+    previous_date = None
+    for _, row in user_logs.iterrows():
+        if all(row[t] for t in TASKS):  # Full day completion
+            if previous_date and (row["Date"].date() - previous_date).days == 1:
+                streak += 1
+            else:
+                streak = 1
+            previous_date = row["Date"].date()
+            max_streak = max(max_streak, streak)
+        else:
+            previous_date = None
+            streak = 0
+    return max_streak
 
 
 # ---------------------
@@ -145,35 +168,35 @@ else:
         completed = sum(user_logs[t].astype(bool).sum() for t in TASKS)
         missed = (days_in_range * TASKS_PER_DAY) - completed
         progress = min((completed / (days_in_range * TASKS_PER_DAY)) * 100, 100)
+        streak = calculate_streak(user_logs)
         summary.append({
             "User": user,
             "Tasks Done": completed,
             "Remaining": missed,
-            "Progress %": round(progress, 1),
-            "FotMob Rating": calculate_fotmob_rating(progress),
-            "XP": completed * 10
+            "Streak": f"🔥 {streak}-day" if streak > 0 else "🔥 0-day",
+            "Rating": calculate_fotmob_rating(progress)
         })
 
-    summary_df = pd.DataFrame(summary).sort_values(by="Progress %", ascending=False)
+    summary_df = pd.DataFrame(summary).sort_values(by="Rating", ascending=False)
     st.dataframe(summary_df, use_container_width=True)
 
-    # Charts
+    # ---------------------
+    # VISUALS
+    # ---------------------
     col1, col2 = st.columns([2, 2])
     with col1:
-        fig_bar = px.bar(summary_df, x="Progress %", y="User", orientation="h",
-                         title="Leaderboard", color="Progress %", color_continuous_scale="Blues")
-        st.plotly_chart(fig_bar, use_container_width=True)
+        # Leaderboard by Rating (FotMob-style colours)
+        fig_rating = px.bar(summary_df, x="Rating", y="User", orientation="h",
+                            title="Leaderboard (Rating)",
+                            color="Rating",
+                            color_continuous_scale=[[0, "red"], [0.6, "yellow"], [1, "green"]],
+                            range_color=[0, 10])
+        st.plotly_chart(fig_rating, use_container_width=True)
+
     with col2:
-        st.markdown("### 🍩 Completed vs Remaining per User")
-        for user in USERS:
-            u_data = next((item for item in summary if item["User"] == user), None)
-            if u_data:
-                comp = u_data["Tasks Done"]
-                missed = u_data["Remaining"]
-                if comp == 0 and missed == 0:
-                    comp, missed = 0.01, 0.01
-                fig = px.pie(values=[comp, missed], names=["Completed", "Remaining"],
-                             hole=0.6, title=user,
-                             color_discrete_map={"Completed": "#00CC96", "Remaining": "#EF553B"})
-                fig.update_traces(textinfo="label+percent", sort=False)
-                st.plotly_chart(fig, use_container_width=True)
+        # Completed vs Remaining (Grouped Bar)
+        fig_tasks = px.bar(summary_df.melt(id_vars="User", value_vars=["Tasks Done", "Remaining"]),
+                           x="value", y="User", color="variable",
+                           barmode="group",
+                           title="Tasks Done vs Remaining")
+        st.plotly_chart(fig_tasks, use_container_width=True)
