@@ -30,10 +30,19 @@ if dark_mode:
 # ---------------------
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
-# Convert st.secrets to dict and fix private_key newlines
+# ✅ FIX: Convert st.secrets to dict and fix private_key newlines
 credentials_dict = dict(st.secrets["gcp_service_account"])
 credentials_dict["private_key"] = credentials_dict["private_key"].replace("\\n", "\n")
 
+# ✅ FIX: Ensure required fields exist
+required_fields = ["type", "project_id", "private_key_id", "private_key",
+                   "client_email", "client_id", "auth_uri", "token_uri"]
+missing = [field for field in required_fields if field not in credentials_dict]
+if missing:
+    st.error(f"Missing required service account fields: {missing}")
+    st.stop()
+
+# ✅ Modern Authentication
 creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
 client = gspread.authorize(creds)
 
