@@ -193,9 +193,11 @@ else:
         </tr>
         """
     table_html += "</table>"
-
+# ---------------------
+# CUSTOM HTML TABLE RENDER
+# ---------------------
     st.markdown(table_html, unsafe_allow_html=True)
-
+   
     # ---------------------
     # VISUALS
     # ---------------------
