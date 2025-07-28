@@ -143,21 +143,23 @@ if logs_df_filtered.empty:
     st.info("No logs yet for this month.")
 else:
     summary = []
-    global_first_log = logs_df_all["Date"].min().date() if not logs_df_all.empty else today_date
+    today = datetime.date.today()
+    global_first_log = logs_df_all["Date"].min().date() if not logs_df_all.empty else today
+    grace_days = 2
 
     for user in USERS:
         user_logs = logs_df_filtered[logs_df_filtered["User"] == user].copy()
         if user_logs.empty:
             completed, missed, streak, rating = 0, 0, 0, 0
         else:
-            first_activity = user_logs["Date"].min().date()
-            today = datetime.date.today()
-            active_days = (today - first_activity).days + 1
-            adjusted_days = max((today - global_first_log).days - 2, 0)  # -2 grace days
-            completed = sum(user_logs[t].astype(bool).sum() for t in TASKS)
-            completed = min(completed, active_days * TASKS_PER_DAY)
-            missed = max(((active_days + adjusted_days) * TASKS_PER_DAY) - completed, 0)
-            progress = (completed / ((active_days + adjusted_days) * TASKS_PER_DAY)) * 100 if active_days > 0 else 0
+            # Days active since global start minus grace
+            active_days = max((today - global_first_log).days + 1 - grace_days, 1)
+            # Completed tasks
+            completed = int(user_logs[TASKS].sum(axis=1).sum())  # FIXED logic
+            theoretical_max = active_days * TASKS_PER_DAY
+            completed = min(completed, theoretical_max)
+            missed = max(theoretical_max - completed, 0)
+            progress = (completed / theoretical_max) * 100 if theoretical_max > 0 else 0
             rating = calculate_fotmob_rating(progress)
             streak = calculate_streak(user_logs)
 
@@ -180,7 +182,9 @@ else:
         else:
             return 'background-color: #dc3545; color: white;'
 
-    st.dataframe(summary_df.style.hide(axis="index").applymap(color_rating, subset=["Rating"]), use_container_width=True)
+    st.dataframe(summary_df.style.hide(axis="index")
+                 .applymap(color_rating, subset=["Rating"])
+                 .format({"Rating": "{:.1f}"}), use_container_width=True)
 
     # ---------------------
     # VISUALS
