@@ -155,16 +155,36 @@ else:
     col_kpi3.metric("✅ Total Done", int(summary_df["Tasks Done"].sum()))
     col_kpi4.metric("❌ Total Missed", int(summary_df["Remaining"].sum()))
 
-    # Custom Styled Table
-    def color_for_rating(val):
-        return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
-    table_html = """<style>table{width:100%;border-collapse:collapse;}
-        th,td{padding:10px;text-align:center;border-bottom:1px solid #444;}th{background:#222;color:#fff;}</style>
-        <table><tr><th>User</th><th>Tasks Done</th><th>Remaining</th><th>Streak</th><th>Rating</th></tr>"""
-    for _, row in summary_df.iterrows():
-        table_html += f"<tr><td>{row['User']}</td><td>{row['Tasks Done']}</td><td>{row['Remaining']}</td><td>{row['Streak']}</td><td style='background:{color_for_rating(row['Rating'])};color:#fff;font-weight:bold;'>{row['Rating']:.1f}</td></tr>"
-    table_html += "</table>"
-    st.markdown(table_html, unsafe_allow_html=True)
+    # Create custom HTML table with colors + centered text
+def color_for_rating(val):
+    return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
+
+table_html = """
+<style>
+    table {width:100%; border-collapse: collapse; margin-top:10px;}
+    th, td {padding:10px; text-align:center; border-bottom:1px solid #444;}
+    th {background:#222; color:#fff;}
+</style>
+<table>
+    <tr>
+        <th>User</th><th>Tasks Done</th><th>Remaining</th><th>Streak</th><th>Rating</th>
+    </tr>
+"""
+for _, row in summary_df.iterrows():
+    color = color_for_rating(row["Rating"])
+    table_html += f"""
+    <tr>
+        <td>{row['User']}</td>
+        <td>{row['Tasks Done']}</td>
+        <td>{row['Remaining']}</td>
+        <td>{row['Streak']}</td>
+        <td style="background:{color};color:white;font-weight:bold;">{row['Rating']:.1f}</td>
+    </tr>
+"""
+table_html += "</table>"
+
+# ✅ Render the styled HTML table
+st.markdown(table_html, unsafe_allow_html=True)
 
     # Charts
     col1, col2 = st.columns([2, 2])
