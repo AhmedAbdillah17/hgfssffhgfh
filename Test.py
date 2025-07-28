@@ -19,7 +19,7 @@ creds = Credentials.from_service_account_info(credentials_dict, scopes=scope)
 client = gspread.authorize(creds)
 
 SHEET_NAME = "Task_Tracker"
-sheet = client.open(SHEET_NAME).worksheet("Log")  # Ensure "Log" sheet exists
+sheet = client.open(SHEET_NAME).worksheet("Log")
 
 # ---------------------
 # SETTINGS
@@ -30,7 +30,7 @@ TASKS = ["10 YouTube Comment Replies", "Market Research"]
 TASKS_PER_DAY = len(TASKS)
 REQUIRED_COLUMNS = ["Timestamp", "User", "Date"] + TASKS + ["Role", "Action"]
 
-# Ensure headers exist
+# Ensure headers
 if len(sheet.get_all_values()) == 0:
     sheet.append_row(REQUIRED_COLUMNS)
 
@@ -38,7 +38,7 @@ if len(sheet.get_all_values()) == 0:
 # FUNCTIONS
 # ---------------------
 def load_logs():
-    """Load logs and convert date columns to datetime."""
+    """Load logs and normalize datatypes."""
     data = sheet.get_all_records()
     df = pd.DataFrame(data)
 
@@ -47,7 +47,6 @@ def load_logs():
             df[col] = None
 
     if not df.empty:
-        # Convert Date column to datetime
         df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
         for t in TASKS:
             df[t] = df[t].astype(str).str.lower().isin(["true", "1", "yes"])
@@ -59,20 +58,19 @@ def save_log(user, date, task_status, action="Log Updated"):
     logs = load_logs()
     date = pd.to_datetime(date)
 
-    # Remove old entries for that user/date
-    if not logs.empty and "Date" in logs.columns:
+    # Remove existing log for same user/date
+    if not logs.empty:
         logs = logs[~((logs["User"] == user) & (logs["Date"].dt.date == date.date()))]
 
-    # Add new row
+    # Add new entry
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     role = ROLES.get(user, "User")
     row_values = [timestamp, user, date.strftime("%Y-%m-%d")] + task_status + [role, action]
 
     new_row = pd.DataFrame([row_values], columns=REQUIRED_COLUMNS)
-
-    # Append and update Google Sheet
     logs = pd.concat([logs, new_row], ignore_index=True)
-    logs = logs[REQUIRED_COLUMNS]  # Ensure order
+
+    # Update Google Sheet
     sheet.clear()
     sheet.update([logs.columns.tolist()] + logs.astype(str).values.tolist())
 
@@ -83,6 +81,13 @@ def get_filtered_logs(year, month):
         return logs_df
     logs_df = logs_df.dropna(subset=["Date"])
     return logs_df[(logs_df["Date"].dt.year == year) & (logs_df["Date"].dt.month == month)]
+
+
+def calculate_fotmob_rating(progress):
+    """Convert progress (0-100%) to FotMob-style rating (0-10)."""
+    rating = (progress / 10)  # Scale
+    if rating > 10: rating = 10
+    return round(rating, 1)
 
 
 # ---------------------
@@ -104,7 +109,7 @@ with st.sidebar:
         )
 
 # ---------------------
-# LOG TASKS SECTION
+# LOG TASKS
 # ---------------------
 st.title("📊 Task Tracker")
 st.subheader("✅ Log Today's Tasks")
@@ -122,7 +127,7 @@ for user in USERS:
         st.success(f"✅ Log updated for {user}")
 
 # ---------------------
-# DASHBOARD SECTION
+# DASHBOARD
 # ---------------------
 st.subheader(f"📈 Dashboard ({selected_month}/{selected_year})")
 logs_df_filtered = get_filtered_logs(selected_year, selected_month)
@@ -140,16 +145,12 @@ else:
         completed = sum(user_logs[t].astype(bool).sum() for t in TASKS)
         missed = (days_in_range * TASKS_PER_DAY) - completed
         progress = min((completed / (days_in_range * TASKS_PER_DAY)) * 100, 100)
-        days_100 = sum(all(row[t] for t in TASKS) for _, row in user_logs.iterrows())
-        streak = calculate_streak(user_logs)  # Calculate user streak
         summary.append({
             "User": user,
-            "Days 100%": days_100,
             "Tasks Done": completed,
             "Remaining": missed,
             "Progress %": round(progress, 1),
-            "Streak 🔥": streak,
-            "Rating": round(progress / 10, 1),
+            "FotMob Rating": calculate_fotmob_rating(progress),
             "XP": completed * 10
         })
 
@@ -176,27 +177,3 @@ else:
                              color_discrete_map={"Completed": "#00CC96", "Remaining": "#EF553B"})
                 fig.update_traces(textinfo="label+percent", sort=False)
                 st.plotly_chart(fig, use_container_width=True)
-
-
-# ---------------------
-# HELPER: Calculate Streak
-# ---------------------
-def calculate_streak(user_logs):
-    """Calculate consecutive days fully completed."""
-    if user_logs.empty:
-        return 0
-    user_logs = user_logs.sort_values("Date")
-    streak = 0
-    current_streak = 0
-    prev_date = None
-    for _, row in user_logs.iterrows():
-        if all(row[t] for t in TASKS):
-            if prev_date and (row["Date"].date() - prev_date).days == 1:
-                current_streak += 1
-            else:
-                current_streak = 1
-            streak = max(streak, current_streak)
-        else:
-            current_streak = 0
-        prev_date = row["Date"].date()
-    return streak
