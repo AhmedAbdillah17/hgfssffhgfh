@@ -19,7 +19,8 @@ USERS = ["MQ", "Samo", "Bashe"]
 # ---------------------
 # GOOGLE SHEETS AUTH (SECURE)
 # ---------------------
-credentials = st.secrets["gcp_service_account"]  # ✅ FIXED
+credentials = dict(st.secrets["gcp_service_account"])
+credentials["private_key"] = credentials["private_key"].replace("\\n", "\n")  # ✅ Fix for newline issue
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(credentials, scope)
 client = gspread.authorize(creds)
