@@ -129,21 +129,13 @@ else:
     today = datetime.date.today()
 
     # Max days = days since first log this month
-    if not logs_df_filtered.empty:
-        first_log_in_month = logs_df_filtered["Date"].min().date()
-        days_active = max((today - first_log_in_month).days + 1, 1)
-    else:
-        days_active = 1
-
+    first_log_in_month = logs_df_filtered["Date"].min().date() if not logs_df_filtered.empty else today
+    days_active = max((today - first_log_in_month).days + 1, 1)
     theoretical_max = days_active * TASKS_PER_DAY
 
     for user in USERS:
         user_logs = logs_df_filtered[logs_df_filtered["User"] == user].copy()
-        if user_logs.empty:
-            completed = 0
-        else:
-            completed = int(user_logs[TASKS].sum(axis=1).sum())
-
+        completed = int(user_logs[TASKS].sum(axis=1).sum()) if not user_logs.empty else 0
         missed = max(theoretical_max - completed, 0)
         progress = (completed / theoretical_max) * 100 if theoretical_max > 0 else 0
         rating = calculate_fotmob_rating(progress)
@@ -166,7 +158,7 @@ else:
     col_kpi3.metric("✅ Total Done", int(summary_df["Tasks Done"].sum()))
     col_kpi4.metric("❌ Total Missed", int(summary_df["Remaining"].sum()))
 
-    # Create custom HTML table with colors
+    # Styled table
     def color_for_rating(val):
         return '#28a745' if val >= 7 else '#ffc107' if val >= 4 else '#dc3545'
 
@@ -193,6 +185,7 @@ else:
         </tr>
         """
     table_html += "</table>"
+
     st.markdown(table_html, unsafe_allow_html=True)
 
     # Charts
